@@ -68,7 +68,7 @@ npm install       # or: bun install
 npm run dev       # or: bun run dev
 ```
 
-Then open `http://localhost:3000` in your browser.
+Then open `http://localhost:8080` in your browser.
 
 > The frontend proxies `/upload` requests to the backend automatically via `vite.config.ts` — no extra config needed.
 
