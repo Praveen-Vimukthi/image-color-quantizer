@@ -41,8 +41,8 @@ export function CompareSlider({ before, after, alt = "comparison" }: Props) {
   return (
     <div
       ref={containerRef}
-      className="relative w-full overflow-hidden rounded-2xl select-none"
-      style={{ aspectRatio: "4/3", background: "oklch(0.95 0.01 260)" }}
+      className="relative w-full overflow-hidden rounded-2xl select-none bg-black/30"
+      style={{ aspectRatio: "4/3" }}
     >
       <img
         src={before}

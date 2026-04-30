@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from "react";
-import { quantizeImage } from "@/lib/quantize";
 import { CompareSlider } from "./CompareSlider";
 import {
   Select,
@@ -35,6 +34,7 @@ export function Quantizer() {
       return;
     }
     setOriginalFile(file);
+    // Clear any previous result when a new image is chosen
     setResultUrl(null);
     const url = URL.createObjectURL(file);
     setOriginalUrl(url);
@@ -47,73 +47,57 @@ export function Quantizer() {
   };
 
   const process = async () => {
-    if (!originalUrl || !originalFile) return;
+    if (!originalFile) return;
     setLoading(true);
     setError(null);
+
     try {
-      // Try backend first if available, else fall back to client-side
-      let url: string | null = null;
-      try {
-        const fd = new FormData();
-        fd.append("image", originalFile);
-        fd.append("k", String(k));
-        const res = await fetch("/upload", { method: "POST", body: fd });
-        if (res.ok) {
-          const ctype = res.headers.get("content-type") ?? "";
-          if (ctype.includes("application/json")) {
-            const j = await res.json();
-            url = j.url || j.image || null;
-          } else if (ctype.startsWith("image/")) {
-            const blob = await res.blob();
-            url = URL.createObjectURL(blob);
-          }
-        }
-      } catch {
-        // ignore — fallback to client
+      const fd = new FormData();
+      fd.append("image", originalFile);
+      fd.append("k", String(k));
+      fd.append("format", format);
+
+      const res = await fetch("/upload", { method: "POST", body: fd });
+
+      if (!res.ok) {
+        let detail = `Server error (${res.status})`;
+        try {
+          const j = await res.json();
+          if (j.detail) detail = j.detail;
+        } catch { /* ignore */ }
+        throw new Error(detail);
       }
 
-      if (!url) {
-        url = await quantizeImage(originalUrl, k);
+      const ctype = res.headers.get("content-type") ?? "";
+      let url: string | null = null;
+
+      if (ctype.startsWith("image/")) {
+        const blob = await res.blob();
+        url = URL.createObjectURL(blob);
+      } else if (ctype.includes("application/json")) {
+        const j = await res.json();
+        url = j.url || j.image || null;
       }
+
+      if (!url) throw new Error("Unexpected response from server.");
       setResultUrl(url);
     } catch (err) {
       console.error(err);
-      setError("Failed to process image. Please try a different file.");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to process image. Is the backend running?"
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const download = async () => {
+  const download = () => {
     if (!resultUrl) return;
     const ext = format === "jpeg" ? "jpg" : format;
-    let href = resultUrl;
-    // Convert via canvas if a non-PNG format is requested
-    if (format !== "png") {
-      try {
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-        await new Promise<void>((res, rej) => {
-          img.onload = () => res();
-          img.onerror = () => rej(new Error("load failed"));
-          img.src = resultUrl;
-        });
-        const canvas = document.createElement("canvas");
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        const ctx = canvas.getContext("2d")!;
-        if (format === "jpeg") {
-          ctx.fillStyle = "#ffffff";
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-        }
-        ctx.drawImage(img, 0, 0);
-        href = canvas.toDataURL(`image/${format}`, 0.92);
-      } catch {
-        href = resultUrl;
-      }
-    }
     const a = document.createElement("a");
-    a.href = href;
+    a.href = resultUrl;
     a.download = `quantized-k${k}.${ext}`;
     a.click();
   };
@@ -131,17 +115,13 @@ export function Quantizer() {
         </h1>
         <p className="mt-4 text-muted-foreground max-w-xl mx-auto">
           Upload an image, choose how many colors to keep, and watch it
-          transform into a stylized, palette-reduced version in your browser.
+          transform into a stylized, palette-reduced version.
         </p>
       </header>
 
-      {/* Upload / Dropzone */}
       {!originalUrl && (
         <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={onDrop}
           onClick={() => inputRef.current?.click()}
@@ -149,8 +129,10 @@ export function Quantizer() {
             dragOver ? "ring-2 ring-primary scale-[1.01]" : ""
           }`}
         >
-          <div className="mx-auto h-16 w-16 rounded-2xl grid place-items-center mb-5"
-               style={{ background: "var(--gradient-primary)" }}>
+          <div
+            className="mx-auto h-16 w-16 rounded-2xl grid place-items-center mb-5"
+            style={{ background: "var(--gradient-primary)" }}
+          >
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" className="text-white">
               <path d="M12 16V4M12 4L7 9M12 4L17 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               <path d="M4 17V18C4 19.6569 5.34315 21 7 21H17C18.6569 21 20 19.6569 20 18V17" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
@@ -170,10 +152,8 @@ export function Quantizer() {
         </div>
       )}
 
-      {/* Workspace */}
       {originalUrl && (
         <div className="space-y-6">
-          {/* Controls */}
           <div className="glass rounded-2xl p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center gap-5">
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between mb-2">
@@ -208,13 +188,7 @@ export function Quantizer() {
                 disabled={loading}
                 className="btn-hero px-5 py-2.5 rounded-xl text-sm font-semibold inline-flex items-center gap-2"
               >
-                {loading ? (
-                  <>
-                    <Spinner /> Processing…
-                  </>
-                ) : (
-                  <>Process Image</>
-                )}
+                {loading ? (<><Spinner /> Processing…</>) : <>Process Image</>}
               </button>
               <div className="inline-flex rounded-xl border border-border/60 bg-white/5 overflow-hidden backdrop-blur-sm">
                 <Select
@@ -228,9 +202,7 @@ export function Quantizer() {
                   >
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent
-                    className="min-w-[7rem] rounded-xl border border-border/60 bg-popover/95 backdrop-blur-xl shadow-xl"
-                  >
+                  <SelectContent className="min-w-[7rem] rounded-xl border border-border/60 bg-popover/95 backdrop-blur-xl shadow-xl">
                     <SelectItem value="png" className="cursor-pointer rounded-lg text-sm font-medium focus:bg-primary/15 focus:text-foreground">PNG</SelectItem>
                     <SelectItem value="jpeg" className="cursor-pointer rounded-lg text-sm font-medium focus:bg-primary/15 focus:text-foreground">JPG</SelectItem>
                     <SelectItem value="webp" className="cursor-pointer rounded-lg text-sm font-medium focus:bg-primary/15 focus:text-foreground">WEBP</SelectItem>
@@ -259,7 +231,6 @@ export function Quantizer() {
             />
           </div>
 
-          {/* View toggle */}
           {resultUrl && (
             <div className="flex justify-center">
               <div className="glass rounded-full p-1 inline-flex text-sm">
@@ -280,7 +251,6 @@ export function Quantizer() {
             </div>
           )}
 
-          {/* Previews */}
           {view === "compare" && resultUrl ? (
             <div className="glass rounded-3xl p-3 sm:p-4">
               <CompareSlider before={originalUrl} after={resultUrl} />
@@ -288,20 +258,11 @@ export function Quantizer() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <Panel label="Original">
-                <img
-                  src={originalUrl}
-                  alt="Original"
-                  className="h-full w-full object-contain fade-swap"
-                />
+                <img src={originalUrl} alt="Original" className="h-full w-full object-contain fade-swap" />
               </Panel>
               <Panel label="Quantized" loading={loading}>
                 {resultUrl ? (
-                  <img
-                    key={resultUrl}
-                    src={resultUrl}
-                    alt="Quantized"
-                    className="h-full w-full object-contain fade-swap"
-                  />
+                  <img key={resultUrl} src={resultUrl} alt="Quantized" className="h-full w-full object-contain fade-swap" />
                 ) : (
                   <div className="h-full w-full grid place-items-center text-sm text-muted-foreground p-6 text-center">
                     {loading ? "Crunching colors…" : `Click "Process Image" to reduce to ${k} colors.`}
@@ -328,26 +289,13 @@ export function Quantizer() {
   );
 }
 
-function Panel({
-  label,
-  children,
-  loading,
-}: {
-  label: string;
-  children: React.ReactNode;
-  loading?: boolean;
-}) {
+function Panel({ label, children, loading }: { label: string; children: React.ReactNode; loading?: boolean }) {
   return (
     <div className="glass rounded-3xl p-3 sm:p-4 relative overflow-hidden">
       <div className="flex items-center justify-between px-2 pb-2">
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-          {label}
-        </span>
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</span>
       </div>
-      <div
-        className="rounded-2xl overflow-hidden bg-black/30 relative"
-        style={{ aspectRatio: "4/3" }}
-      >
+      <div className="rounded-2xl overflow-hidden bg-black/30 relative" style={{ aspectRatio: "4/3" }}>
         {children}
         {loading && (
           <div className="absolute inset-0 grid place-items-center bg-black/30 backdrop-blur-sm">
@@ -362,20 +310,9 @@ function Panel({
 function Spinner({ large }: { large?: boolean }) {
   const size = large ? 36 : 16;
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      className="animate-spin text-primary"
-      fill="none"
-    >
+    <svg width={size} height={size} viewBox="0 0 24 24" className="animate-spin text-primary" fill="none">
       <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" />
-      <path
-        d="M21 12a9 9 0 0 0-9-9"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
     </svg>
   );
 }
