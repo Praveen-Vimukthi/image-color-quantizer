@@ -216,7 +216,6 @@
     to { opacity: 1; transform: translateY(0); }
   }
 
-  /* Floating background blobs */
   .bg-blobs {
     position: fixed;
     inset: 0;
